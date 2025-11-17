@@ -1,0 +1,228 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "cm-backend.fullname" . }}-celery-beat
+  labels:
+    {{- include "cm-backend.labels" . | nindent 4 }}
+    app.kubernetes.io/component: celery-beat
+spec:
+  {{- if not .Values.autoscaling.enabled }}
+  replicas: {{ .Values.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "cm-backend.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: celery-beat
+  template:
+    metadata:
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      labels:
+        {{- include "cm-backend.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: celery-beat
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "cm-backend.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: {{ .Chart.Name }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          resources:
+            {{- toYaml .Values.resources.default | nindent 12 }}
+          command: ['sh', '-c', 'celery -A app.worker.celery_worker beat']
+
+          # livenessProbe:
+          #   exec:
+          #     command:
+          #       - pgrep
+          #       - -f
+          #       - "celery beat"
+          #   initialDelaySeconds: 10
+          #   periodSeconds: 15
+          #   timeoutSeconds: 2
+          #   failureThreshold: 3
+
+          # readinessProbe:
+          #   exec:
+          #     command:
+          #       - pgrep
+          #       - -f
+          #       - "celery beat"
+          #   initialDelaySeconds: 10
+          #   periodSeconds: 15
+          #   timeoutSeconds: 2
+          #   failureThreshold: 3
+
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: cm-backend-secrets
+                  key: DATABASE_URL
+            - name: DB_HOST_NAME
+              valueFrom:
+                secretKeyRef:
+                  name: cm-backend-secrets
+                  key: DB_HOST_NAME
+            - name: DB_NAME
+              valueFrom:
+                secretKeyRef:
+                  name: cm-backend-secrets
+                  key: DB_NAME
+            - name: DB_USER_NAME
+              valueFrom:
+                secretKeyRef:
+                  name: cm-backend-secrets
+                  key: DB_USER_NAME
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: cm-backend-secrets
+                  key: DB_PASSWORD
+            - name: DB_PORT
+              valueFrom:
+                secretKeyRef:
+                  name: cm-backend-secrets
+                  key: DB_PORT
+            - name: DB_CONNECTION_STRING
+              valueFrom:
+                secretKeyRef:
+                  name: cm-backend-secrets
+                  key: DB_CONNECTION_STRING
+            - name: CELERY_BROKER_URL
+              valueFrom:
+                secretKeyRef:
+                  name: cm-backend-secrets
+                  key: CELERY_BROKER_URL
+            - name: CELERY_RESULT_BACKEND
+              valueFrom:
+                secretKeyRef:
+                  name: cm-backend-secrets
+                  key: CELERY_RESULT_BACKEND
+            - name: TENANT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: cm-backend-secrets
+                  key: TENANT_ID
+            - name: APP_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: cm-backend-secrets
+                  key: APP_CLIENT_ID
+            - name: OPENAPI_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: cm-backend-secrets
+                  key: OPENAPI_CLIENT_ID
+            - name: SCOPE_DESCRIPTION
+              valueFrom:
+                secretKeyRef:
+                  name: cm-backend-secrets
+                  key: SCOPE_DESCRIPTION
+            - name: ENCRYPTION_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: cm-backend-secrets
+                  key: ENCRYPTION_KEY
+            - name: CUBEJS_DB_TYPE
+              valueFrom:
+                secretKeyRef:
+                  name: cm-backend-secrets
+                  key: CUBEJS_DB_TYPE
+            - name: CUBEJS_DB_HOST
+              valueFrom:
+                secretKeyRef:
+                  name: cm-backend-secrets
+                  key: CUBEJS_DB_HOST
+            - name: CUBEJS_DB_PORT
+              valueFrom:
+                secretKeyRef:
+                  name: cm-backend-secrets
+                  key: CUBEJS_DB_PORT
+            - name: CUBEJS_DB_NAME
+              valueFrom:
+                secretKeyRef:
+                  name: cm-backend-secrets
+                  key: CUBEJS_DB_NAME
+            - name: CUBEJS_DB_USER
+              valueFrom:
+                secretKeyRef:
+                  name: cm-backend-secrets
+                  key: CUBEJS_DB_USER
+            - name: CUBEJS_DB_PASS
+              valueFrom:
+                secretKeyRef:
+                  name: cm-backend-secrets
+                  key: CUBEJS_DB_PASS
+            - name: CUBEJS_DB_SSL
+              valueFrom:
+                secretKeyRef:
+                  name: cm-backend-secrets
+                  key: CUBEJS_DB_SSL
+            - name: CUBEJS_API_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: cm-backend-secrets
+                  key: CUBEJS_API_SECRET
+            - name: CUBEJS_DEV_MODE
+              valueFrom:
+                secretKeyRef:
+                  name: cm-backend-secrets
+                  key: CUBEJS_DEV_MODE
+            - name: CUBEJS_EXTERNAL_DEFAULT
+              valueFrom:
+                secretKeyRef:
+                  name: cm-backend-secrets
+                  key: CUBEJS_EXTERNAL_DEFAULT
+            - name: CUBEJS_SCHEDULED_REFRESH_DEFAULT
+              valueFrom:
+                secretKeyRef:
+                  name: cm-backend-secrets
+                  key: CUBEJS_SCHEDULED_REFRESH_DEFAULT
+            - name: CUBEJS_API_URL
+              valueFrom:
+                secretKeyRef:
+                  name: cm-backend-secrets
+                  key: CUBEJS_API_URL
+            - name: CUBEJS_LOG_LEVEL
+              valueFrom:
+                secretKeyRef:
+                  name: cm-backend-secrets
+                  key: CUBEJS_LOG_LEVEL
+            - name: CUBEJS_CONCURRENCY
+              valueFrom:
+                secretKeyRef:
+                  name: cm-backend-secrets
+                  key: CUBEJS_CONCURRENCY
+            - name: AZURE_OPENAI_ENDPOINT
+              valueFrom:
+                secretKeyRef:
+                  name: cm-backend-secrets
+                  key: AZURE_OPENAI_ENDPOINT
+            - name: AZURE_OPENAI_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: cm-backend-secrets
+                  key: AZURE_OPENAI_KEY
+            - name: AZURE_DEPLOYMENT_NAME
+              valueFrom:
+                secretKeyRef:
+                  name: cm-backend-secrets
+                  key: AZURE_DEPLOYMENT_NAME
+            - name: AZURE_OPENAI_VERSION
+              valueFrom:
+                secretKeyRef:
+                  name: cm-backend-secrets
+                  key: AZURE_OPENAI_VERSION
