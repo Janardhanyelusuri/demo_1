@@ -14,6 +14,7 @@ from datetime import datetime
 try:
     # Standardized Imports (assuming 'app' is the project root)
     from app.ingestion.aws.llm_s3_integration import run_llm_analysis_s3
+    from app.ingestion.aws.llm_ec2_vpc_integration import run_llm_analysis as run_llm_analysis_ec2_vpc
     from app.ingestion.azure.llm import run_llm_analysis
     # from app.ingestion.gcp.llm import run_llm_analysis_gcp # <-- Keeping this commented to resolve the 404
 except ImportError as e:
@@ -95,18 +96,35 @@ async def _resolve_schema_name(project_id: Optional[Union[int, str]], schema_nam
 # ---------------------------------------------------------
 @router.post("/aws/{project_id}", response_model=LLMResponse, status_code=200)
 async def llm_aws(
-    project_id: str, 
+    project_id: str,
     payload: LLMRequest,
 ):
     schema = await _resolve_schema_name(project_id, payload.schema_name)
 
-    result = run_llm_analysis_s3(
-        resource_type=payload.resource_type,
-        schema_name=schema,
-        start_date=payload.start_date,
-        end_date=payload.end_date,
-        resource_id=payload.resource_id
-    )
+    # Route based on resource type
+    resource_type_lower = payload.resource_type.lower().strip()
+
+    if resource_type_lower == 's3':
+        result = run_llm_analysis_s3(
+            resource_type=payload.resource_type,
+            schema_name=schema,
+            start_date=payload.start_date,
+            end_date=payload.end_date,
+            resource_id=payload.resource_id
+        )
+    elif resource_type_lower in ['ec2', 'vpc']:
+        result = run_llm_analysis_ec2_vpc(
+            resource_type=payload.resource_type,
+            schema_name=schema,
+            start_date=payload.start_date,
+            end_date=payload.end_date,
+            resource_id=payload.resource_id
+        )
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported AWS resource type: {payload.resource_type}. Supported types: s3, ec2, vpc"
+        )
 
     return LLMResponse(
         status="success",
@@ -116,7 +134,7 @@ async def llm_aws(
         start_date=payload.start_date,
         end_date=payload.end_date,
         resource_id=payload.resource_id,
-        recommendations=json.dumps(result) if isinstance(result, list) else None, 
+        recommendations=json.dumps(result) if isinstance(result, list) else None,
         details=None,
         timestamp=datetime.utcnow()
     )
