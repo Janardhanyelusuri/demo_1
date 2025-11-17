@@ -158,6 +158,12 @@ async def llm_azure(
         payload.resource_id,
     )
 
+    # Convert single dict result to list for consistent frontend handling
+    if result is not None:
+        result_list = [result] if isinstance(result, dict) else result
+    else:
+        result_list = []
+
     return LLMResponse(
         status="success",
         cloud="azure",
@@ -166,7 +172,7 @@ async def llm_azure(
         start_date=payload.start_date,
         end_date=payload.end_date,
         resource_id=payload.resource_id,
-        recommendations=json.dumps(result) if isinstance(result, list) else None,
+        recommendations=json.dumps(result_list) if result_list else None,
         details=None,
         timestamp=datetime.utcnow()
     )
