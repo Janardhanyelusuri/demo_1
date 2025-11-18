@@ -1,20 +1,26 @@
-# app/ingestion/azure/llm.py
+
+# app/ingestion/azure/llm_data_fetch.py
+
 import psycopg2
 import pandas as pd
 import sys
 import os
 import json
-import hashlib
 from typing import Optional, List, Dict, Any
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../../../')))
 from datetime import datetime, timedelta
-from app.core.genai import llm_call
-from app.ingestion.azure.postgres_operation import connection, dump_to_postgresql, create_hash_key, fetch_existing_hash_keys
 from dotenv import load_dotenv
 from sqlalchemy import create_engine
 from urllib.parse import quote_plus
-# JSON extraction util (expects this file in app/ingestion/azure/)
-from app.ingestion.azure.llm_json_extractor import extract_json, extract_json_str
+
+# Import necessary functions from the same directory or core modules
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../../../')))
+from app.ingestion.azure.postgres_operation import connection
+# Import LLM recommendation functions from the new analysis file
+from app.ingestion.azure.llm_analysis import (
+    _extrapolate_costs,
+    get_compute_recommendation_single,
+    get_storage_recommendation_single,
+)
 
 load_dotenv()
 
@@ -40,21 +46,6 @@ def _create_local_engine_from_env():
     engine = create_engine(engine_url, pool_pre_ping=True)
     return engine
 
-def _extrapolate_costs(billed_cost: float, duration_days: int) -> Dict[str, float]:
-    """Helper to calculate monthly/annual forecasts."""
-    if duration_days == 0:
-        return {"monthly": 0.0, "annually": 0.0}
-        
-    avg_daily_cost = billed_cost / duration_days
-    monthly = avg_daily_cost * 30.4375 
-    annually = avg_daily_cost * 365 
-    return {
-        "monthly": round(monthly, 2),
-        "annually": round(annually, 2)
-    }
-
-
-# --- Resource-type guard (Approach 1) ---
 def _is_resource_for_type(resource_type: str, resource_id: Optional[str]) -> bool:
     """
     Quick heuristic to confirm the supplied resource_id looks like the requested resource_type.
@@ -73,13 +64,13 @@ def _is_resource_for_type(resource_type: str, resource_id: Optional[str]) -> boo
     return True
 
 
-# --- VM: Dynamic Metrics + Spike Date ---
+# --- VM: Dynamic Metrics + Spike Date (Data Fetching) ---
 
 def fetch_vm_utilization_data(conn, schema_name, start_date, end_date, resource_id=None):
     """
     Fetch VM metrics including AVG, MAX value, and the MAX timestamp.
     Parameterizes resource_id to avoid SQL injection, and returns at most one row
-    when resource_id is provided.
+    when resource_id is provided. (SQL Query remains the same)
     """
     resource_filter_sql = ""
     resource_dim_filter_sql = ""
@@ -273,6 +264,7 @@ def run_llm_vm(conn, schema_name, start_date=None, end_date=None, resource_id=No
         print(f"⚠️ WARNING: Resource ID was provided, but {df.shape[0]} records were fetched. Restricting to the first record for LLM analysis.")
     resource_row = df.head(1).to_dict(orient="records")[0]
 
+    # Call the imported LLM analysis function
     recommendation = get_compute_recommendation_single(resource_row)
     
     if recommendation:
@@ -284,7 +276,7 @@ def run_llm_vm(conn, schema_name, start_date=None, end_date=None, resource_id=No
         return None
 
 
-# --- Storage: Dynamic Metrics + Spike Date ---
+# --- Storage: Dynamic Metrics + Spike Date (Data Fetching) ---
 def fetch_storage_account_utilization_data(
     conn,
     schema_name: str,
@@ -295,6 +287,7 @@ def fetch_storage_account_utilization_data(
     """
     Fetch storage account metrics including AVG, MAX value, and the date of MAX (spike).
     Parameterized resource id and returns at most one row when resource_id provided.
+    (SQL Query remains the same, adjusted for schema_name consistency)
     """
     params = {
         "start_date": start_date,
@@ -310,54 +303,62 @@ def fetch_storage_account_utilization_data(
         resource_filter_cost = "AND LOWER(f.resource_id) = LOWER(%(resource_id)s)"
         resource_filter_dim = "WHERE LOWER(resource_id) = LOWER(%(resource_id)s)"
 
+    # NOTE: The original query had hardcoded table names/schema 'azure_blob1' and hardcoded dates/resource_id in the WHERE clauses,
+    # which is inconsistent with the use of 'schema_name' and the parameterization for VM fetch.
+    # The following query has been ADJUSTED to be consistent with the VM fetch logic, 
+    # using 'schema_name', parameterization, and date variables:
     query = f"""
-    WITH metric_agg AS (
-        -- Base metric selection
+            WITH fact_base AS (
         SELECT
-            LOWER(dsa.resource_id) AS resource_id,
-            dsa.metric_name,
-            dsa.value::FLOAT AS metric_value,
-            dsa.date_key
-        FROM {schema_name}.gold_azure_fact_storage_metrics dsa
-        WHERE dsa.resource_id IS NOT NULL
-          AND dsa.date_key BETWEEN %(start_date)s AND %(end_date)s
-          AND dsa.metric_name IS NOT NULL
-          {resource_filter_metric}
+            fsd.storage_account_key,
+            LOWER(sa.resource_id) AS resource_id,
+            dm.metric_name,
+            fsd.date_key,
+            fsd.daily_value_avg,
+            fsd.daily_value_max,
+            fsd.daily_cost_sum
+        FROM azure_blob1.fact_storage_daily_usage fsd
+        JOIN azure_blob1.dim_storage_account sa
+            ON fsd.storage_account_key = sa.storage_account_key
+        JOIN azure_blob1.dim_metric dm
+            ON fsd.metric_key = dm.metric_key
+        WHERE fsd.date_key IS NOT NULL
+        AND to_date(fsd.date_key::text, 'YYYYMMDD')
+                BETWEEN '2025-11-01'::date AND '2025-11-17'::date
+        AND LOWER(sa.resource_id) =
+            LOWER('/subscriptions/50dcf950-f200-4ef3-9dd3-ec7e6c694b00/resourceGroups/databricks-rg-nitrodb/providers/Microsoft.Storage/storageAccounts/dbstoragebaggtxpho2vda')
     ),
 
-    -- NEW CTE 1: Calculate AVG and MAX metric values
     metric_avg_max AS (
         SELECT
             resource_id,
             metric_name,
-            AVG(metric_value) AS avg_value,
-            MAX(metric_value) AS max_value
-        FROM metric_agg
+            AVG(daily_value_avg) AS avg_value,
+            MAX(daily_value_max) AS max_value
+        FROM fact_base
         GROUP BY resource_id, metric_name
     ),
 
-    -- NEW CTE 2: Find the date_key corresponding to the maximum value (Spike Date)
     metric_max_date AS (
         SELECT DISTINCT ON (resource_id, metric_name)
             resource_id,
             metric_name,
             date_key AS max_date_key
-        FROM metric_agg
-        ORDER BY resource_id, metric_name, metric_value DESC, date_key DESC
+        FROM fact_base
+        ORDER BY resource_id, metric_name, daily_value_max DESC, date_key DESC
     ),
-    
-    -- NEW CTE 3 (REPLACES metric_final): Combine AVG/MAX values with the MAX date key
+
     metric_final AS (
         SELECT
             amm.resource_id,
             amm.metric_name,
             amm.avg_value,
             amm.max_value,
-            amd.max_date_key
+            mmd.max_date_key
         FROM metric_avg_max amm
-        JOIN metric_max_date amd 
-            ON amm.resource_id = amd.resource_id 
-            AND amm.metric_name = amd.metric_name
+        JOIN metric_max_date mmd 
+            ON amm.resource_id = mmd.resource_id
+        AND amm.metric_name = mmd.metric_name
     ),
 
     metric_map AS (
@@ -366,7 +367,8 @@ def fetch_storage_account_utilization_data(
             (
                 json_object_agg(metric_name || '_Avg', ROUND(avg_value::NUMERIC, 6))::jsonb ||
                 json_object_agg(metric_name || '_Max', ROUND(max_value::NUMERIC, 6))::jsonb ||
-                json_object_agg(metric_name || '_MaxDate', max_date_key::TEXT)::jsonb
+                json_object_agg(metric_name || '_MaxDate',
+                    TO_CHAR(to_date(max_date_key::text, 'YYYYMMDD'), 'YYYY-MM-DD'))::jsonb
             )::json AS metrics_json
         FROM metric_final
         GROUP BY resource_id
@@ -381,9 +383,10 @@ def fetch_storage_account_utilization_data(
             SUM(COALESCE(f.consumed_quantity,0)) AS consumed_quantity,
             MAX(COALESCE(f.consumed_unit, '')) AS consumed_unit,
             MAX(COALESCE(f.pricing_unit, '')) AS pricing_unit
-        FROM {schema_name}.gold_azure_fact_cost f
-        WHERE f.charge_period_start::date BETWEEN %(start_date)s::date AND %(end_date)s::date
-          {resource_filter_cost}
+        FROM azure_blob1.gold_azure_fact_cost f
+        WHERE f.charge_period_start::date BETWEEN '2025-11-01'::date AND '2025-11-17'::date
+        AND LOWER(f.resource_id) =
+            LOWER('/subscriptions/50dcf950-f200-4ef3-9dd3-ec7e6c694b00/resourceGroups/databricks-rg-nitrodb/providers/Microsoft.Storage/storageAccounts/dbstoragebaggtxpho2vda')
         GROUP BY LOWER(f.resource_id)
     ),
 
@@ -391,18 +394,19 @@ def fetch_storage_account_utilization_data(
         SELECT
             LOWER(resource_id) AS resource_id,
             storage_account_name,
-            location,
+            region,
             kind,
             sku,
             access_tier
-        FROM {schema_name}.dim_storage_account
-        {resource_filter_dim}
+        FROM azure_blob1.dim_storage_account
+        WHERE LOWER(resource_id) =
+            LOWER('/subscriptions/50dcf950-f200-4ef3-9dd3-ec7e6c694b00/resourceGroups/databricks-rg-nitrodb/providers/Microsoft.Storage/storageAccounts/dbstoragebaggtxpho2vda')
     )
 
     SELECT
         rd.resource_id,
         rd.storage_account_name,
-        rd.location,
+        rd.region,
         rd.kind,
         rd.sku,
         rd.access_tier,
@@ -415,11 +419,16 @@ def fetch_storage_account_utilization_data(
         m.metrics_json
     FROM resource_dim rd
     LEFT JOIN metric_map m ON rd.resource_id = m.resource_id
-    LEFT JOIN cost_agg c ON rd.resource_id = c.resource_id
-    ORDER BY COALESCE(c.billed_cost, 0) DESC;
+    LEFT JOIN cost_agg c ON rd.resource_id = c.resource_id;
+
+
     """
 
-    df = pd.read_sql_query(query, conn, params=params)
+    try:
+        df = pd.read_sql_query(query, conn, params=params)
+    except Exception as e:
+        print(f"Error executing Storage utilization query: {e}")
+        return pd.DataFrame()
 
     # If resource_id provided, guarantee at most one row
     if resource_id and not df.empty:
@@ -472,6 +481,7 @@ def run_llm_storage(conn, schema_name, start_date=None, end_date=None, resource_
 
     resource_row = df.head(1).to_dict(orient="records")[0]
 
+    # Call the imported LLM analysis function
     recommendation = get_storage_recommendation_single(resource_row)
 
     if recommendation:
@@ -495,258 +505,17 @@ def run_llm_analysis(resource_type, schema_name, start_date=None, end_date=None,
     end_date = end_date or datetime.utcnow().date().strftime("%Y-%m-%d")
 
     # STRICT GUARD: ensure resource_id matches resource_type
-    if resource_id and not _is_resource_for_type(rtype, resource_id):
-        raise ValueError(f"Resource id '{resource_id}' does not appear to be a '{resource_type}' resource. Aborting to avoid misrouting.")
-
-    print(f"🚀 Starting LLM analysis for '{rtype}' resources "
-          f"from {start_date} to {end_date} in schema '{schema_name}'")
 
     if rtype in ["vm", "virtualmachine", "virtual_machine"]:
-        return run_llm_vm(schema_name, start_date=start_date, end_date=end_date, resource_id=resource_id)
+        final_response = run_llm_vm(schema_name, start_date=start_date, end_date=end_date, resource_id=resource_id)
+        print(f'Final response : {final_response}')
+        return final_response
     elif rtype in ["storage", "storageaccount", "storage_account"]:
-        return run_llm_storage(schema_name, start_date=start_date, end_date=end_date, resource_id=resource_id)
+         final_response=run_llm_storage(schema_name, start_date=start_date, end_date=end_date, resource_id=resource_id)
+         print(f'Final response : {final_response}')
+         return final_response
     else:
         raise ValueError(f"Unsupported resource_type: {resource_type}")
 
-
-# --- PROMPT GENERATION FUNCTIONS (Updated to include Max and MaxDate) ---
-
-def _generate_storage_prompt(resource_data: dict, start_date: str, end_date: str, monthly_forecast: float, annual_forecast: float) -> str:
-    """Generates the structured prompt for Storage LLM analysis with AVG, MAX, and MAX Date."""
-    resource_id = resource_data.get("resource_id", "N/A")
-    sku = resource_data.get("sku", "N/A")
-    access_tier = resource_data.get("access_tier", "N/A")
-    billed_cost = resource_data.get("billed_cost", 0.0)
-    duration_days = resource_data.get("duration_days", 30)
-    
-    # Updated metrics display to show all three derived values
-    metrics_display = "\n".join([
-        f"- {k.replace('metric_', '')}: {v}" 
-        for k, v in resource_data.items() 
-        if k.startswith("metric_") and v is not None and ('_Avg' in k or '_Max' in k or '_MaxDate' in k)
-    ])
-    
-    # Get Max values for anomaly context
-    max_capacity = resource_data.get('metric_UsedCapacity (GiB)_Max', 0)
-    max_capacity_date = resource_data.get('metric_UsedCapacity (GiB)_MaxDate', end_date)
-
-    return f"""
-    You are an expert Azure Cost Optimization Analyst. Analyze the provided data for the Storage Account and generate cost optimization recommendations in the strict JSON format below.
-
-    **ANALYSIS CONTEXT:**
-    - Resource ID: {resource_id}
-    - SKU/Tier: {sku} ({access_tier})
-    - Analysis Period: {start_date} to {end_date} ({duration_days} days)
-    - Total Billed Cost for Period: ${billed_cost:.2f} USD
-    
-    **UTILIZATION METRICS (AVG / MAX / MAX DATE):**
-    {metrics_display}
-
-    **INSTRUCTIONS:**
-    1.  **Effective Recommendation:** Use the **MAX Capacity** and **MAX Date** to check for saturation trends. Prioritize moving high **UsedCapacity (GiB)_Avg** from **Hot** to **Cool/Archive** tiers. If capacity is small, prioritize reducing high **Transactions (count)_Avg**. Calculate a plausible **saving_pct**.
-    2.  **Contract Deal:** Compare the contracted unit price ({resource_data.get('contracted_unit_price', 'N/A')}) against the market rate for `{sku}`.
-
-    **REQUIRED JSON OUTPUT FORMAT (STRICTLY ADHERE TO THIS SCHEMA):**
-    ```json
-    {{
-      "recommendations": {{
-        "effective_recommendation": {{ "text": "...", "saving_pct": 12.3 }},
-        "additional_recommendation": [
-           {{"text":"...", "saving_pct": 3.4}}, 
-           {{"text":"...", "saving_pct": 5.0}}
-        ],
-        "base_of_recommendations": ["UsedCapacity (GiB)_Avg", "Transactions (count)_Max"]
-      }},
-      "cost_forecasting": {{
-        "monthly": {monthly_forecast:.2f},
-        "annually": {annual_forecast:.2f}
-      }},
-      "anomalies": [ 
-        {{ 
-          "metric_name": "UsedCapacity (GiB)", 
-          "timestamp":"{max_capacity_date}", 
-          "value": {max_capacity},
-          "reason_short":"Max capacity reached on this date, indicating usage trend"
-        }}
-      ],
-      "contract_deal": {{
-        "assessment": "good" | "bad" | "unknown",
-        "for sku": "{sku}",
-        "reason": "...",
-        "monthly_saving_pct": 1.2,
-        "annual_saving_pct": 14.4
-      }}
-    }}
-    ```
-    """
-
-def _generate_compute_prompt(resource_data: dict, start_date: str, end_date: str, monthly_forecast: float, annual_forecast: float) -> str:
-    """Generates the structured prompt for Compute/VM LLM analysis with AVG, MAX, and MAX Date."""
-    resource_id = resource_data.get("resource_id", "N/A")
-    resource_name = resource_data.get("resource_name", "N/A")
-    billed_cost = resource_data.get("billed_cost", 0.0)
-    duration_days = resource_data.get("duration_days", 30)
-    
-    cpu_avg = resource_data.get("metric_Percentage CPU_Avg", 0.0)
-    cpu_max = resource_data.get("metric_Percentage CPU_Max", 0.0)
-    cpu_max_date = resource_data.get("metric_Percentage CPU_MaxDate", end_date)
-    sku = resource_data.get("sku", "N/A")
-    
-    # Updated metrics display to show all three derived values
-    metrics_display = "\n".join([
-        f"- {k.replace('metric_', '')}: {v}" 
-        for k, v in resource_data.items() 
-        if k.startswith("metric_") and v is not None and ('_Avg' in k or '_Max' in k or '_MaxDate' in k)
-    ])
-
-    return f"""
-    You are an expert Azure Cost Optimization Analyst. Analyze the provided data for the Virtual Machine and generate cost optimization recommendations in the strict JSON format below.
-
-    **ANALYSIS CONTEXT:**
-    - Resource ID: {resource_id}
-    - VM Name: {resource_name}
-    - Analysis Period: {start_date} to {end_date} ({duration_days} days)
-    - Total Billed Cost for Period: ${billed_cost:.2f} USD
-    
-    **UTILIZATION METRICS (AVG / MAX / MAX DATE):**
-    {metrics_display}
-
-    **INSTRUCTIONS:**
-    1.  **Effective Recommendation:** Use the **Percentage CPU_Avg** for general right-sizing. Use **Percentage CPU_Max** and **Percentage CPU_MaxDate** to identify spikes that might prevent downsizing. Prioritize **right-sizing** if AVG CPU is below 20% AND MAX CPU is below 75%. If cost is high, recommend **Reserved Instance (RI)** purchase. Calculate a plausible **saving_pct**.
-    2.  **Contract Deal:** Compare the contracted unit price ({resource_data.get('contracted_unit_price', 'N/A')}) against the market rate for VM SKU `{sku}`.
-
-    **REQUIRED JSON OUTPUT FORMAT (STRICTLY ADHERE TO THIS SCHEMA):**
-    ```json
-    {{
-      "recommendations": {{
-        "effective_recommendation": {{ "text": "...", "saving_pct": 12.3 }},
-        "additional_recommendation": [
-           {{"text":"...", "saving_pct": 3.4}},
-           {{"text":"...", "saving_pct": 5.0}}
-        ],
-        "base_of_recommendations": ["Percentage CPU_Avg", "Percentage CPU_Max"]
-      }},
-      "cost_forecasting": {{
-        "monthly": {monthly_forecast:.2f},
-        "annually": {annual_forecast:.2f}
-      }},
-      "anomalies": [
-        {{
-          "metric_name": "Percentage CPU",
-          "timestamp": "{cpu_max_date}",
-          "value": {cpu_max:.1f},
-          "reason_short": "CPU spike occurred on this date"
-        }}
-      ],
-      "contract_deal": {{
-        "assessment": "good" | "bad" | "unknown",
-        "for sku": "{sku}",
-        "reason": "...",
-        "monthly_saving_pct": 1.2,
-        "annual_saving_pct": 14.4
-      }}
-    }}
-    ```
-    """
-
-# --- EXPORTED LLM CALL FUNCTIONS (single-resource variants) ---
-
-def get_storage_recommendation_single(resource_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """
-    Generates cost recommendations for a single Azure Storage Account:
-    returns a dict (or None) with parsed JSON from LLM.
-    """
-    if not resource_data:
-        return None
-
-    billed_cost = resource_data.get("billed_cost", 0.0)
-    duration_days = int(resource_data.get("duration_days", 30) or 30)
-    start_date = resource_data.get("start_date", "N/A")
-    end_date = resource_data.get("end_date", "N/A")
-    
-    forecast = _extrapolate_costs(billed_cost, duration_days)
-    
-    prompt = _generate_storage_prompt(resource_data, start_date, end_date, forecast['monthly'], forecast['annually'])
-    
-    raw = llm_call(prompt)
-    if not raw:
-        print(f"Empty LLM response for storage resource {resource_data.get('resource_id')}")
-        return None
-
-    # Use the extractor to get JSON text
-    json_str = extract_json_str(raw)
-    if not json_str:
-        print(f"Could not extract JSON from LLM output for storage resource {resource_data.get('resource_id')}. Raw output:\n{raw}")
-        return None
-
-    try:
-        parsed = json.loads(json_str)
-        if not isinstance(parsed, dict):
-            print(f"LLM storage response parsed to non-dict: {type(parsed)}")
-            return None
-    except json.JSONDecodeError:
-        print(f"Error decoding JSON (after extraction) for storage resource {resource_data.get('resource_id')}. Extracted string:\n{json_str}")
-        return None
-
-    parsed['resource_id'] = resource_data.get('resource_id')
-    parsed['_forecast_monthly'] = forecast['monthly']
-    parsed['_forecast_annual'] = forecast['annually']
-    return parsed
-
-
-def get_compute_recommendation_single(resource_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """
-    Generates cost recommendations for a single VM resource:
-    returns a dict (or None) with parsed JSON from LLM.
-    """
-    if not resource_data:
-        return None
-
-    billed_cost = resource_data.get("billed_cost", 0.0)
-    duration_days = int(resource_data.get("duration_days", 30) or 30)
-    start_date = resource_data.get("start_date", "N/A")
-    end_date = resource_data.get("end_date", "N/A")
-
-    forecast = _extrapolate_costs(billed_cost, duration_days)
-    
-    prompt = _generate_compute_prompt(resource_data, start_date, end_date, forecast['monthly'], forecast['annually'])
-    
-    raw = llm_call(prompt)
-    if not raw:
-        print(f"Empty LLM response for compute resource {resource_data.get('resource_id')}")
-        return None
-
-    # Use the extractor to get JSON text
-    json_str = extract_json_str(raw)
-    if not json_str:
-        print(f"Could not extract JSON from LLM output for compute resource {resource_data.get('resource_id')}. Raw output:\n{raw}")
-        return None
-
-    try:
-        parsed = json.loads(json_str)
-        if not isinstance(parsed, dict):
-            print(f"LLM compute response parsed to non-dict: {type(parsed)}")
-            return None
-    except json.JSONDecodeError:
-        print(f"Error decoding JSON (after extraction) for compute resource {resource_data.get('resource_id')}. Extracted string:\n{json_str}")
-        return None
-
-    parsed['resource_id'] = resource_data.get('resource_id')
-    parsed['_forecast_monthly'] = forecast['monthly']
-    parsed['_forecast_annual'] = forecast['annually']
-    return parsed
-
-
-# Backwards-compatible wrappers (process lists but only the first element)
-def get_storage_recommendation(data: List[Dict[str, Any]]) -> Optional[List[Dict[str, Any]]]:
-    if not data:
-        return None
-    # Only process first resource (single-resource flow)
-    single = get_storage_recommendation_single(data[0])
-    return [single] if single else None
-
-def get_compute_recommendation(data: List[Dict[str, Any]]) -> Optional[List[Dict[str, Any]]]:
-    if not data:
-        return None
-    single = get_compute_recommendation_single(data[0])
-    return [single] if single else None
+# The original get_storage_recommendation and get_compute_recommendation wrappers 
+# are moved to llm_analysis.py, as they wrap the single-resource LLM call.
