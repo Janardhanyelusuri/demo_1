@@ -43,17 +43,32 @@ export interface RawRecommendation {
   anomalies: Anomaly[];
   contract_deal: ContractDeal;
   resource_id: string; // Added by the Python code
+  _forecast_monthly?: number; // Added by the Python code
+  _forecast_annual?: number; // Added by the Python code
 }
 
-// Define the flattened, ready-to-use structure for the frontend UI
+// Define the normalized, ready-to-use structure for the frontend UI
 export interface NormalizedRecommendation {
+  // Resource info
   resourceId: string;
-  title: string;
+
+  // Recommendations
+  effectiveRecommendation: RecommendationDetail;
+  additionalRecommendations: RecommendationDetail[];
+  baseOfRecommendations: string[];
   totalSavingPercent: number;
-  monthlyForecast: number;
-  anomalyTimestamp: string;
+
+  // Forecasting
+  costForecasting: CostForecasting;
+
+  // Anomalies
+  anomalies: Anomaly[];
+
+  // Contract/Deal info
+  contractDeal: ContractDeal;
+
+  // Severity (for UI styling)
   severity: 'High' | 'Medium' | 'Low';
-  details: RecommendationDetail[];
 }
 
 // --- NEW FILTER AND MAPPING TYPES ---

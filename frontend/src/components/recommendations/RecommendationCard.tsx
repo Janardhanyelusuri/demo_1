@@ -1,7 +1,14 @@
 // src/components/recommendations/RecommendationCard.tsx
 import React from 'react';
-import { NormalizedRecommendation, RecommendationDetail } from "@/types/recommendations";
-import { AlertCircle, ArrowDownCircle, CheckCircle, Clock } from 'lucide-react';
+import { NormalizedRecommendation } from "@/types/recommendations";
+import { AlertCircle, Clock, CheckCircle } from 'lucide-react';
+
+// Import the specialized card components
+import MetricsCard from './MetricsCard';
+import EffectiveRecommendationCard from './EffectiveRecommendationCard';
+import AdditionalRecommendationsCard from './AdditionalRecommendationsCard';
+import AnomaliesCard from './AnomaliesCard';
+import ContractDealCard from './ContractDealCard';
 
 interface RecommendationCardProps {
     recommendation: NormalizedRecommendation;
@@ -9,92 +16,92 @@ interface RecommendationCardProps {
 
 const getSeverityStyles = (severity: 'High' | 'Medium' | 'Low') => {
     switch (severity) {
-        // ... (Styles logic remains the same)
         case 'High':
             return {
-                border: 'border-red-500',
-                text: 'text-red-700',
-                icon: <AlertCircle className="w-5 h-5 text-red-500" />
+                icon: <AlertCircle className="w-6 h-6 text-red-500" />,
+                color: 'text-red-700',
+                label: 'High Impact'
             };
         case 'Medium':
             return {
-                border: 'border-yellow-500',
-                text: 'text-yellow-700',
-                icon: <Clock className="w-5 h-5 text-yellow-500" />
+                icon: <Clock className="w-6 h-6 text-yellow-500" />,
+                color: 'text-yellow-700',
+                label: 'Medium Impact'
             };
         case 'Low':
             return {
-                border: 'border-green-500',
-                text: 'text-green-700',
-                icon: <CheckCircle className="w-5 h-5 text-green-500" />
+                icon: <CheckCircle className="w-6 h-6 text-green-500" />,
+                color: 'text-green-700',
+                label: 'Low Impact'
             };
         default:
             return {
-                border: 'border-gray-300',
-                text: 'text-gray-700',
-                icon: <ArrowDownCircle className="w-5 h-5 text-gray-500" />
+                icon: <AlertCircle className="w-6 h-6 text-gray-500" />,
+                color: 'text-gray-700',
+                label: 'Unknown'
             };
     }
 };
 
 const RecommendationCard: React.FC<RecommendationCardProps> = ({ recommendation: rec }) => {
-    const { border, text, icon } = getSeverityStyles(rec.severity);
-    const estSaving = rec.monthlyForecast.toLocaleString('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 0, maximumFractionDigits: 0 });
+    const { icon, color, label } = getSeverityStyles(rec.severity);
+    const monthlyForcastDisplay = rec.costForecasting.monthly.toLocaleString('en-US', {
+        style: 'currency',
+        currency: 'USD',
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2
+    });
 
     return (
-        <div className={`p-6 border-l-4 ${border} rounded-lg shadow-md bg-white transition-shadow hover:shadow-lg`}>
-            {/* ... (Header content remains the same) */}
-            <div className="flex justify-between items-start">
-                <div className="flex-1 min-w-0">
-                    <div className="flex items-center space-x-2">
-                        {icon}
-                        <h3 className="text-xl font-semibold text-gray-800 truncate">{rec.title}</h3>
+        <div className="space-y-6">
+            {/* Header Section */}
+            <div className="bg-gradient-to-r from-blue-50 to-indigo-50 p-6 rounded-lg border border-blue-200">
+                <div className="flex justify-between items-start mb-4">
+                    <div className="flex items-start space-x-4">
+                        <div>{icon}</div>
+                        <div>
+                            <h2 className="text-2xl font-bold text-gray-800">Resource Analysis</h2>
+                            <p className="text-sm text-gray-600 mt-1">
+                                Resource ID: <span className="font-mono text-xs">{rec.resourceId}</span>
+                            </p>
+                        </div>
                     </div>
-                    <p className={`text-sm font-medium mt-2 ${text}`}>
-                        **Severity:** {rec.severity} | **Anomaly:** {rec.anomalyTimestamp.split('T')[0]}
-                    </p>
-                    <p className="text-xs text-gray-500 truncate mt-1">
-                         **Resource ID:** {rec.resourceId}
-                    </p>
+                    <div className="text-right">
+                        <p className={`text-sm font-semibold ${color}`}>{label}</p>
+                        <p className="text-3xl font-bold text-green-600 mt-2">{rec.totalSavingPercent}%</p>
+                        <p className="text-xs text-gray-600">Total Savings</p>
+                    </div>
                 </div>
-                <div className="text-right ml-6 flex-shrink-0">
-                    <p className="text-3xl font-bold text-green-600">
-                        {rec.totalSavingPercent}%
-                    </p>
-                    <p className="text-sm text-gray-500">Total Est. Savings</p>
-                    <p className="text-md font-semibold text-gray-600 mt-1">
-                        {estSaving}/Month
-                    </p>
+
+                {/* Monthly Forecast Preview */}
+                <div className="border-t border-blue-200 pt-4 mt-4">
+                    <p className="text-xs text-gray-600 mb-2">Monthly Forecast Preview</p>
+                    <p className="text-xl font-bold text-blue-600">{monthlyForcastDisplay}</p>
                 </div>
             </div>
 
-            {/* Details Section - FIX APPLIED HERE */}
-            <div className="mt-4 pt-4 border-t border-gray-100">
-                <h4 className="text-sm font-semibold text-gray-700 mb-2">Detailed Recommendations:</h4>
-                <ul className="space-y-2">
-                    {/* FIX: Use optional chaining or check if rec.details exists and is an array 
-                      before mapping. We also check if detail.text and detail.saving_pct exist.
-                    */}
-                    {Array.isArray(rec.details) && rec.details.map((detail: RecommendationDetail, index) => {
-                        // Ensure both text and saving_pct are present before rendering the list item
-                        if (!detail.text || detail.saving_pct === undefined) return null; 
+            {/* Main Content Grid - 5 Cards */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                {/* Row 1: Metrics Card spans 2 columns */}
+                <div className="lg:col-span-2">
+                    <MetricsCard recommendation={rec} />
+                </div>
 
-                        return (
-                            <li key={index} className="flex justify-between items-start text-sm text-gray-600">
-                                <span className="flex-1 mr-4">
-                                    • {detail.text}
-                                </span>
-                                <span className="font-mono text-xs bg-green-50 text-green-800 px-2 py-0.5 rounded flex-shrink-0">
-                                    {detail.saving_pct}% Saving
-                                </span>
-                            </li>
-                        );
-                    })}
-                    {/* Fallback for empty details array */}
-                    {Array.isArray(rec.details) && rec.details.length === 0 && (
-                        <li className="text-sm text-gray-500 italic">No specific steps provided.</li>
-                    )}
-                </ul>
+                {/* Row 2: Effective & Additional Recommendations */}
+                <div>
+                    <EffectiveRecommendationCard recommendation={rec} />
+                </div>
+                <div>
+                    <AdditionalRecommendationsCard recommendation={rec} />
+                </div>
+
+                {/* Row 3: Anomalies & Contract Deal */}
+                <div>
+                    <AnomaliesCard recommendation={rec} />
+                </div>
+                <div>
+                    <ContractDealCard recommendation={rec} />
+                </div>
             </div>
         </div>
     );

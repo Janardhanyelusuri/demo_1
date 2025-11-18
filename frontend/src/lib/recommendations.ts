@@ -12,15 +12,13 @@ import {
 } from "@/types/recommendations";
 import { format } from "date-fns"; 
 
-// Helper function to normalize the data (from previous steps)
+// Helper function to normalize the data - preserving ALL data sections
 const normalizeRecommendations = (data: RawRecommendation[]): NormalizedRecommendation[] => {
   return data.map((item) => {
+    // Calculate total saving percentage
     let totalSavingPct = item.recommendations.effective_recommendation.saving_pct;
-    const allDetails = [item.recommendations.effective_recommendation];
-    
     item.recommendations.additional_recommendation.forEach(detail => {
         totalSavingPct += detail.saving_pct;
-        allDetails.push(detail);
     });
 
     const getSeverity = (saving: number): 'High' | 'Medium' | 'Low' => {
@@ -30,13 +28,26 @@ const normalizeRecommendations = (data: RawRecommendation[]): NormalizedRecommen
     };
 
     return {
+      // Resource info
       resourceId: item.resource_id,
-      title: item.recommendations.effective_recommendation.text,
+
+      // Recommendations - preserve structure
+      effectiveRecommendation: item.recommendations.effective_recommendation,
+      additionalRecommendations: item.recommendations.additional_recommendation,
+      baseOfRecommendations: item.recommendations.base_of_recommendations,
       totalSavingPercent: parseFloat(totalSavingPct.toFixed(2)),
-      monthlyForecast: item.cost_forecasting.monthly,
-      anomalyTimestamp: item.anomalies[0]?.timestamp || "N/A",
+
+      // Forecasting - preserve full object
+      costForecasting: item.cost_forecasting,
+
+      // Anomalies - preserve full array
+      anomalies: item.anomalies,
+
+      // Contract/Deal - preserve full object
+      contractDeal: item.contract_deal,
+
+      // Severity for UI styling
       severity: getSeverity(totalSavingPct),
-      details: allDetails,
     } as NormalizedRecommendation;
   });
 };
