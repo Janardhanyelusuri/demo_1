@@ -92,3 +92,9 @@ export const GCP_RESOURCES: CloudResourceMap[] = [
     { displayName: "Cloud Storage", backendKey: "storage" },
     // Add other GCP resources as needed
 ];
+
+// Resource option for dropdown (resource ID + name)
+export interface ResourceOption {
+    resource_id: string;
+    resource_name: string;
+}

@@ -1,12 +1,13 @@
 import sys
 import os
 import json
-from typing import Optional, Union
-from fastapi import APIRouter, HTTPException
+from typing import Optional, Union, List
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 from tortoise.exceptions import DoesNotExist
 from app.models.project import Project
 from datetime import datetime
+from app.core.db import get_db_connection
 
 # =========================================================
 # DIAGNOSTIC BLOCK: Catch silent import errors that cause 404
@@ -176,6 +177,93 @@ async def llm_gcp(
         end_date=payload.end_date,
         resource_id=payload.resource_id,
         details=result,
-        recommendations=None, 
+        recommendations=None,
         timestamp=datetime.utcnow()
     )
+
+
+# ---------------------------------------------------------
+# Get Resource IDs by Type (for dropdown population)
+# ---------------------------------------------------------
+@router.get("/{cloud_platform}/{project_id}/resources/{resource_type}", status_code=200)
+async def get_resource_ids(
+    cloud_platform: str,
+    project_id: str,
+    resource_type: str,
+    schema_name: Optional[str] = None
+) -> List[dict]:
+    """
+    Fetch resource IDs for a specific resource type to populate the dropdown.
+    Returns a list of {resource_id, resource_name} objects.
+    """
+    schema = await _resolve_schema_name(project_id, schema_name)
+
+    # Map resource types to table names and columns
+    resource_mapping = {
+        "azure": {
+            "vm": {
+                "table": "dim_virtual_machine",
+                "id_column": "resource_id",
+                "name_column": "vm_name"
+            },
+            "storage": {
+                "table": "dim_storage_account",
+                "id_column": "resource_id",
+                "name_column": "storage_account_name"
+            }
+        },
+        "aws": {
+            "s3": {
+                "table": "dim_s3_bucket",
+                "id_column": "bucket_arn",
+                "name_column": "bucket_name"
+            },
+            "ec2": {
+                "table": "dim_ec2_instance",
+                "id_column": "instance_id",
+                "name_column": "instance_name"
+            }
+        }
+    }
+
+    # Get the table info for this resource type
+    if cloud_platform not in resource_mapping:
+        raise HTTPException(status_code=400, detail=f"Unsupported cloud platform: {cloud_platform}")
+
+    if resource_type not in resource_mapping[cloud_platform]:
+        raise HTTPException(status_code=400, detail=f"Unsupported resource type: {resource_type}")
+
+    config = resource_mapping[cloud_platform][resource_type]
+    table_name = f"{schema}.{config['table']}"
+    id_col = config['id_column']
+    name_col = config['name_column']
+
+    # Query the database
+    conn = await get_db_connection()
+    try:
+        query = f"""
+            SELECT DISTINCT
+                {id_col} as resource_id,
+                {name_col} as resource_name
+            FROM {table_name}
+            WHERE {id_col} IS NOT NULL
+            ORDER BY {name_col}
+            LIMIT 1000
+        """
+
+        rows = await conn.fetch(query)
+
+        result = [
+            {
+                "resource_id": row['resource_id'],
+                "resource_name": row['resource_name'] or row['resource_id']
+            }
+            for row in rows
+        ]
+
+        return result
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch resources: {str(e)}")
+    finally:
+        await conn.close()

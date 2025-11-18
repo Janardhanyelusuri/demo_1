@@ -1,14 +1,15 @@
 // src/lib/recommendations.ts
 
-import axiosInstance, { BACKEND } from "@/lib/api"; 
-import { 
-    RawRecommendation, 
-    NormalizedRecommendation, 
-    RecommendationFilters, 
-    AZURE_RESOURCES, 
-    AWS_RESOURCES, 
+import axiosInstance, { BACKEND } from "@/lib/api";
+import {
+    RawRecommendation,
+    NormalizedRecommendation,
+    RecommendationFilters,
+    AZURE_RESOURCES,
+    AWS_RESOURCES,
     GCP_RESOURCES,
-    CloudResourceMap // REQUIRED for explicit typing
+    CloudResourceMap,
+    ResourceOption // REQUIRED for explicit typing
 } from "@/types/recommendations";
 import { format } from "date-fns"; 
 
@@ -78,14 +79,43 @@ const normalizeRecommendations = (data: RawRecommendation[]): NormalizedRecommen
  */
 const getBackendKey = (cloud: string, displayName: string): string | undefined => {
     // ⭐ FIX APPLIED: Explicitly type the resources array to resolve the visual error
-    let resources: CloudResourceMap[] = []; 
-    
+    let resources: CloudResourceMap[] = [];
+
     if (cloud === 'azure') resources = AZURE_RESOURCES;
     else if (cloud === 'aws') resources = AWS_RESOURCES;
     else if (cloud === 'gcp') resources = GCP_RESOURCES;
 
     const map = resources.find(r => r.displayName === displayName);
     return map?.backendKey;
+};
+
+
+/**
+ * Fetch available resource IDs for a given resource type.
+ * Used to populate the resource ID dropdown.
+ */
+export const fetchResourceIds = async (
+    projectId: string,
+    cloudPlatform: 'azure' | 'aws' | 'gcp',
+    displayName: string
+): Promise<ResourceOption[]> => {
+    const backendKey = getBackendKey(cloudPlatform, displayName);
+
+    if (!backendKey) {
+        console.warn(`Invalid resource type: ${displayName}`);
+        return [];
+    }
+
+    const url = `${BACKEND}/llm/${cloudPlatform}/${projectId}/resources/${backendKey}`;
+
+    try {
+        const response = await axiosInstance.get(url);
+        console.log(`✅ Fetched ${response.data.length} resource IDs for ${displayName}`);
+        return response.data as ResourceOption[];
+    } catch (err) {
+        console.error(`❌ Failed to fetch resource IDs for ${displayName}:`, err);
+        return [];
+    }
 };
 
 
