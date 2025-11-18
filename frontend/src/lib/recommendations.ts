@@ -14,13 +14,33 @@ import { format } from "date-fns";
 
 // Helper function to normalize the data (from previous steps)
 const normalizeRecommendations = (data: RawRecommendation[]): NormalizedRecommendation[] => {
-  return data.map((item) => {
-    let totalSavingPct = item.recommendations.effective_recommendation.saving_pct;
-    const allDetails = [item.recommendations.effective_recommendation];
-    
-    item.recommendations.additional_recommendation.forEach(detail => {
-        totalSavingPct += detail.saving_pct;
-        allDetails.push(detail);
+  return data.map((item, index): NormalizedRecommendation => {
+    console.log(`📊 Normalizing item ${index}:`, {
+      resource_id: item.resource_id,
+      has_recommendations: !!item.recommendations,
+      has_cost_forecasting: !!item.cost_forecasting
+    });
+
+    // Defensive checks for nested properties
+    const recommendations = item.recommendations || {
+      effective_recommendation: { text: 'No recommendation available', saving_pct: 0 } as RecommendationDetail,
+      additional_recommendation: [] as RecommendationDetail[]
+    };
+
+    const effectiveRec: RecommendationDetail = recommendations.effective_recommendation || {
+      text: 'No recommendation available',
+      saving_pct: 0
+    };
+    const additionalRecs: RecommendationDetail[] = recommendations.additional_recommendation || [];
+
+    let totalSavingPct: number = effectiveRec.saving_pct || 0;
+    const allDetails: RecommendationDetail[] = [effectiveRec];
+
+    additionalRecs.forEach((detail: RecommendationDetail) => {
+        if (detail && typeof detail.saving_pct === 'number') {
+          totalSavingPct += detail.saving_pct;
+          allDetails.push(detail);
+        }
     });
 
     const getSeverity = (saving: number): 'High' | 'Medium' | 'Low' => {
@@ -29,15 +49,27 @@ const normalizeRecommendations = (data: RawRecommendation[]): NormalizedRecommen
       return 'Low';
     };
 
-    return {
-      resourceId: item.resource_id,
-      title: item.recommendations.effective_recommendation.text,
+    // Defensive access to cost_forecasting
+    const costForecasting = item.cost_forecasting || { monthly: 0, annually: 0 };
+    const anomalies = item.anomalies || [];
+
+    const normalized: NormalizedRecommendation = {
+      resourceId: item.resource_id || 'Unknown',
+      title: effectiveRec.text || 'No recommendation available',
       totalSavingPercent: parseFloat(totalSavingPct.toFixed(2)),
-      monthlyForecast: item.cost_forecasting.monthly,
-      anomalyTimestamp: item.anomalies[0]?.timestamp || "N/A",
+      monthlyForecast: costForecasting.monthly || 0,
+      anomalyTimestamp: anomalies[0]?.timestamp || "N/A",
       severity: getSeverity(totalSavingPct),
       details: allDetails,
-    } as NormalizedRecommendation;
+    };
+
+    console.log(`✅ Normalized item ${index}:`, {
+      resourceId: normalized.resourceId,
+      title: normalized.title.substring(0, 50),
+      monthlyForecast: normalized.monthlyForecast
+    });
+
+    return normalized;
   });
 };
 
@@ -88,20 +120,29 @@ export const fetchRecommendationsWithFilters = async (
         const response = await axiosInstance.post(url, body, {
             headers: { "Content-Type": "application/json" }
         });
-        
+
         // 3. Parse the JSON string from the 'recommendations' field
-        const rawJsonString = response.data.recommendations; 
-        
+        const rawJsonString = response.data.recommendations;
+
+        console.log('📦 Raw API Response:', response.data);
+        console.log('📦 Raw JSON String:', rawJsonString);
+
         if (rawJsonString) {
-             const rawData = JSON.parse(rawJsonString) as RawRecommendation[]; 
+             const rawData = JSON.parse(rawJsonString) as RawRecommendation[];
+             console.log('✅ Parsed Raw Data:', rawData);
+
              // 4. Normalize and return
-             return normalizeRecommendations(rawData);
+             const normalized = normalizeRecommendations(rawData);
+             console.log('✅ Normalized Data:', normalized);
+
+             return normalized;
         }
 
+        console.warn('⚠️ No recommendations in response');
         return [];
 
     } catch (err) {
-        console.error(`API Error fetching ${cloudPlatform} ${backendKey}:`, err);
+        console.error(`❌ API Error fetching ${cloudPlatform} ${backendKey}:`, err);
         // Throw a user-friendly error after logging the technical details
         throw new Error(`Failed to load ${filters.resourceType} analysis. Please check the backend service.`);
     }

@@ -498,6 +498,7 @@ def run_llm_analysis(resource_type, schema_name, start_date=None, end_date=None,
     Unified entry point for running LLM cost optimization analyses.
     This version implements a strict guard: it will raise ValueError if the provided
     resource_id does not look like the requested resource_type.
+    Returns a list containing the recommendation (or empty list if None).
     """
     # Input normalization
     rtype = resource_type.strip().lower()
@@ -509,11 +510,13 @@ def run_llm_analysis(resource_type, schema_name, start_date=None, end_date=None,
     if rtype in ["vm", "virtualmachine", "virtual_machine"]:
         final_response = run_llm_vm(schema_name, start_date=start_date, end_date=end_date, resource_id=resource_id)
         print(f'Final response : {final_response}')
-        return final_response
+        # Wrap in list for API consistency - frontend expects an array
+        return [final_response] if final_response else []
     elif rtype in ["storage", "storageaccount", "storage_account"]:
          final_response=run_llm_storage(schema_name, start_date=start_date, end_date=end_date, resource_id=resource_id)
          print(f'Final response : {final_response}')
-         return final_response
+         # Wrap in list for API consistency - frontend expects an array
+         return [final_response] if final_response else []
     else:
         raise ValueError(f"Unsupported resource_type: {resource_type}")
 

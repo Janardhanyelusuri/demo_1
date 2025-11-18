@@ -51,10 +51,10 @@ const RecommendationCard: React.FC<RecommendationCardProps> = ({ recommendation:
                         <h3 className="text-xl font-semibold text-gray-800 truncate">{rec.title}</h3>
                     </div>
                     <p className={`text-sm font-medium mt-2 ${text}`}>
-                        **Severity:** {rec.severity} | **Anomaly:** {rec.anomalyTimestamp.split('T')[0]}
+                        <span className="font-semibold">Severity:</span> {rec.severity} | <span className="font-semibold">Anomaly:</span> {rec.anomalyTimestamp.split('T')[0]}
                     </p>
-                    <p className="text-xs text-gray-500 truncate mt-1">
-                         **Resource ID:** {rec.resourceId}
+                    <p className="text-xs text-gray-500 mt-1" title={rec.resourceId}>
+                         <span className="font-semibold">Resource ID:</span> <span className="truncate inline-block max-w-full">{rec.resourceId}</span>
                     </p>
                 </div>
                 <div className="text-right ml-6 flex-shrink-0">
