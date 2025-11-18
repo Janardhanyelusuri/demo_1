@@ -14,20 +14,23 @@ import { format } from "date-fns";
 
 // Helper function to normalize the data (from previous steps)
 const normalizeRecommendations = (data: RawRecommendation[]): NormalizedRecommendation[] => {
-  return data.map((item) => {
+  return data.map((item): NormalizedRecommendation => {
     // Defensive checks for nested properties
     const recommendations = item.recommendations || {
-      effective_recommendation: { text: 'No recommendation available', saving_pct: 0 },
-      additional_recommendation: []
+      effective_recommendation: { text: 'No recommendation available', saving_pct: 0 } as RecommendationDetail,
+      additional_recommendation: [] as RecommendationDetail[]
     };
 
-    const effectiveRec = recommendations.effective_recommendation || { text: 'No recommendation available', saving_pct: 0 };
-    const additionalRecs = recommendations.additional_recommendation || [];
+    const effectiveRec: RecommendationDetail = recommendations.effective_recommendation || {
+      text: 'No recommendation available',
+      saving_pct: 0
+    };
+    const additionalRecs: RecommendationDetail[] = recommendations.additional_recommendation || [];
 
-    let totalSavingPct = effectiveRec.saving_pct || 0;
-    const allDetails = [effectiveRec];
+    let totalSavingPct: number = effectiveRec.saving_pct || 0;
+    const allDetails: RecommendationDetail[] = [effectiveRec];
 
-    additionalRecs.forEach(detail => {
+    additionalRecs.forEach((detail: RecommendationDetail) => {
         if (detail && typeof detail.saving_pct === 'number') {
           totalSavingPct += detail.saving_pct;
           allDetails.push(detail);
@@ -52,7 +55,7 @@ const normalizeRecommendations = (data: RawRecommendation[]): NormalizedRecommen
       anomalyTimestamp: anomalies[0]?.timestamp || "N/A",
       severity: getSeverity(totalSavingPct),
       details: allDetails,
-    } as NormalizedRecommendation;
+    };
   });
 };
 
