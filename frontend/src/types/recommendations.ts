@@ -1,7 +1,7 @@
 // src/types/recommendations.ts
 
 // Define the structure for a single recommendation (effective or additional)
-export interface RecommendationDetail { // <-- FIX: Added 'export' here
+export interface RecommendationDetail {
   text: string;
   saving_pct: number;
 }
@@ -10,7 +10,7 @@ export interface RecommendationDetail { // <-- FIX: Added 'export' here
 interface RecommendationsBlock {
   effective_recommendation: RecommendationDetail;
   additional_recommendation: RecommendationDetail[];
-  base_of_recommendations: string[];
+  base_of_recommendations: Array<Record<string, number>>; // Changed from string[] to array of objects
 }
 
 // Define the cost forecasting block

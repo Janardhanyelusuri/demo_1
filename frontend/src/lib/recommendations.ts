@@ -14,7 +14,13 @@ import { format } from "date-fns";
 
 // Helper function to normalize the data (from previous steps)
 const normalizeRecommendations = (data: RawRecommendation[]): NormalizedRecommendation[] => {
-  return data.map((item): NormalizedRecommendation => {
+  return data.map((item, index): NormalizedRecommendation => {
+    console.log(`📊 Normalizing item ${index}:`, {
+      resource_id: item.resource_id,
+      has_recommendations: !!item.recommendations,
+      has_cost_forecasting: !!item.cost_forecasting
+    });
+
     // Defensive checks for nested properties
     const recommendations = item.recommendations || {
       effective_recommendation: { text: 'No recommendation available', saving_pct: 0 } as RecommendationDetail,
@@ -47,7 +53,7 @@ const normalizeRecommendations = (data: RawRecommendation[]): NormalizedRecommen
     const costForecasting = item.cost_forecasting || { monthly: 0, annually: 0 };
     const anomalies = item.anomalies || [];
 
-    return {
+    const normalized: NormalizedRecommendation = {
       resourceId: item.resource_id || 'Unknown',
       title: effectiveRec.text || 'No recommendation available',
       totalSavingPercent: parseFloat(totalSavingPct.toFixed(2)),
@@ -56,6 +62,14 @@ const normalizeRecommendations = (data: RawRecommendation[]): NormalizedRecommen
       severity: getSeverity(totalSavingPct),
       details: allDetails,
     };
+
+    console.log(`✅ Normalized item ${index}:`, {
+      resourceId: normalized.resourceId,
+      title: normalized.title.substring(0, 50),
+      monthlyForecast: normalized.monthlyForecast
+    });
+
+    return normalized;
   });
 };
 
