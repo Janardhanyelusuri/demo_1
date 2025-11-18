@@ -15,17 +15,22 @@ import { format } from "date-fns";
 // Helper function to normalize the data (from previous steps)
 const normalizeRecommendations = (data: RawRecommendation[]): NormalizedRecommendation[] => {
   return data.map((item) => {
-    let totalSavingPct = item.recommendations.effective_recommendation.saving_pct;
+    // Get the primary recommendation saving percentage for severity calculation
+    const effectiveSavingPct = item.recommendations.effective_recommendation.saving_pct;
+
+    // Calculate total savings by summing all recommendations
+    let totalSavingPct = effectiveSavingPct;
     const allDetails = [item.recommendations.effective_recommendation];
-    
+
     item.recommendations.additional_recommendation.forEach(detail => {
         totalSavingPct += detail.saving_pct;
         allDetails.push(detail);
     });
 
+    // FIX: Severity should be based on the effective recommendation only, not the sum
     const getSeverity = (saving: number): 'High' | 'Medium' | 'Low' => {
       if (saving >= 20) return 'High';
-      if (saving >= 5) return 'Medium';
+      if (saving >= 10) return 'Medium';
       return 'Low';
     };
 
@@ -35,7 +40,8 @@ const normalizeRecommendations = (data: RawRecommendation[]): NormalizedRecommen
       totalSavingPercent: parseFloat(totalSavingPct.toFixed(2)),
       monthlyForecast: item.cost_forecasting.monthly,
       anomalyTimestamp: item.anomalies[0]?.timestamp || "N/A",
-      severity: getSeverity(totalSavingPct),
+      // Use effective recommendation's saving_pct for severity, not the total
+      severity: getSeverity(effectiveSavingPct),
       details: allDetails,
     } as NormalizedRecommendation;
   });
@@ -61,11 +67,11 @@ const getBackendKey = (cloud: string, displayName: string): string | undefined =
  * Public function: Fetches recommendations based on user-selected filters.
  */
 export const fetchRecommendationsWithFilters = async (
-    projectId: string, 
+    projectId: string,
     cloudPlatform: 'azure' | 'aws' | 'gcp',
     filters: RecommendationFilters
 ): Promise<NormalizedRecommendation[]> => {
-    
+
     // 1. Get the internal backend key from the selected display name
     const backendKey = getBackendKey(cloudPlatform, filters.resourceType);
 
@@ -73,8 +79,8 @@ export const fetchRecommendationsWithFilters = async (
         throw new Error("Invalid resource type selected.");
     }
 
-    const url = `${BACKEND}/llm/${cloudPlatform}/${projectId}`; 
-    
+    const url = `${BACKEND}/llm/${cloudPlatform}/${projectId}`;
+
     // 2. Prepare the payload, formatting dates to ISO string if they exist
     const body = {
         resource_type: backendKey,
@@ -88,12 +94,12 @@ export const fetchRecommendationsWithFilters = async (
         const response = await axiosInstance.post(url, body, {
             headers: { "Content-Type": "application/json" }
         });
-        
+
         // 3. Parse the JSON string from the 'recommendations' field
-        const rawJsonString = response.data.recommendations; 
-        
+        const rawJsonString = response.data.recommendations;
+
         if (rawJsonString) {
-             const rawData = JSON.parse(rawJsonString) as RawRecommendation[]; 
+             const rawData = JSON.parse(rawJsonString) as RawRecommendation[];
              // 4. Normalize and return
              return normalizeRecommendations(rawData);
         }
@@ -104,5 +110,39 @@ export const fetchRecommendationsWithFilters = async (
         console.error(`API Error fetching ${cloudPlatform} ${backendKey}:`, err);
         // Throw a user-friendly error after logging the technical details
         throw new Error(`Failed to load ${filters.resourceType} analysis. Please check the backend service.`);
+    }
+};
+
+/**
+ * Fetches available resource IDs for a given cloud platform, project, and resource type.
+ */
+export const fetchResourceIds = async (
+    projectId: string,
+    cloudPlatform: 'azure' | 'aws' | 'gcp',
+    resourceType: string
+): Promise<Array<{ resource_id: string; resource_name: string }>> => {
+
+    // Get the backend key for the resource type
+    const backendKey = getBackendKey(cloudPlatform, resourceType);
+
+    if (!backendKey) {
+        console.warn(`Invalid resource type: ${resourceType}`);
+        return [];
+    }
+
+    const url = `${BACKEND}/llm/${cloudPlatform}/${projectId}/resources/${backendKey}`;
+
+    try {
+        const response = await axiosInstance.get(url);
+
+        if (response.data.status === "success" && response.data.resource_ids) {
+            return response.data.resource_ids;
+        }
+
+        return [];
+
+    } catch (err) {
+        console.error(`Error fetching resource IDs for ${cloudPlatform} ${resourceType}:`, err);
+        return [];
     }
 };

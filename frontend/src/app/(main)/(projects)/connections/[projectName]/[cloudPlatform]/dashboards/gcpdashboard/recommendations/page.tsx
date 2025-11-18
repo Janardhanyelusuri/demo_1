@@ -77,6 +77,8 @@ const GcpRecommendationsPage: React.FC = () => {
         resourceOptions={resourceOptions}
         isLoading={isLoading}
         onRunAnalysis={handleFetch}
+        projectId={projectId}
+        cloudPlatform={cloudPlatform}
       />
 
       {/* RESULTS DISPLAY */}
